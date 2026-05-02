@@ -1,6 +1,9 @@
-import axios from 'axios';
-const API = axios.create({ baseURL: 'http://127.0.0.1:5000/api' });
+import axios from "axios";
 
-export const trainRL = (scenario) => API.post('/train', { scenario });
-export const runPathfind = (payload) => API.post('/pathfind', payload);
-export const runComparison = (payload) => API.post('/compare', payload);
+const API = axios.create({
+  baseURL: "http://127.0.0.1:5000/api",
+});
+
+export const trainRL = (scenario = "static") => API.post("/train", { scenario });
+
+export const runAllAlgorithms = (payload) => API.post("/run_all", payload);

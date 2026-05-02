@@ -1,69 +1,99 @@
-import time
-import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import time
+
 from algorithms.astar import run_astar
 from algorithms.hybrid import run_hybrid
-from algorithms.rl_agent import train_rl, run_dqn
+from algorithms.rl_agent import run_dqn
+from hex_grid import build_weights_from_hexes
+from dynamic_runner import simulate_dynamic
 
 app = Flask(__name__)
-CORS(app)
-os.makedirs("models", exist_ok=True)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-@app.route("/")
-def home():
-    return jsonify({"status": "online"})
 
 @app.route("/api/train", methods=["POST"])
 def train():
-    try:
-        return jsonify(train_rl(episodes=300, scenario="static"))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"message": "Training not required (model already loaded)."})
+
 
 @app.route("/api/run_all", methods=["POST"])
 def run_all():
-    data = request.get_json() or {}
-    hex_list = data.get("hexes", [])
-    
-    weights = {}
-    start = None
-    goal = None
-    valid_cells = set()
-    
-    for h in hex_list:
-        q, r = h["q"], h["r"]
-        w = h.get("weight", 1)
-        weights[(q, r)] = w
-        valid_cells.add((q, r))
-        if h.get("is_start"): start = (q, r)
-        if h.get("is_goal"): goal = (q, r)
+    data = request.get_json()
+    env_mode = data.get("env_mode", "static")
 
-    if not start or not goal:
-        return jsonify({"error": "Missing start/goal"}), 400
+    # -------------------------------
+    # DYNAMIC MODE
+    # -------------------------------
+    if env_mode == "dynamic":
+        radius = int(data.get("radius", 6))
+        frame_count = int(data.get("frame_count", 25))
+        steps_per_frame = int(data.get("steps_per_frame", 2))
 
-    result = {}
+        sim_data = simulate_dynamic(
+            radius=radius,
+            frame_count=frame_count,
+            steps_per_frame=steps_per_frame
+        )
 
-    for algo_name, func in [("astar", run_astar), ("dqn", run_dqn), ("hybrid", run_hybrid)]:
-        try:
-            t0 = time.time()
-            path, steps, cost, nodes, explored = func(start, goal, weights, valid_cells)
-            result[algo_name] = {
-                "path": [{"q": p[0], "r": p[1]} for p in path],
-                "explored": [{"q": p[0], "r": p[1]} for p in explored],
-                "metrics": {
-                    "time": round(time.time() - t0, 6),
-                    "steps": steps,
-                    "cost": cost,
-                    "nodes": nodes
-                }
-            }
-        except Exception as e:
-            print(f"{algo_name} error: {e}")
-            result[algo_name] = {"error": str(e)}
+        return jsonify(sim_data)
 
-    result["hexes"] = hex_list
-    return jsonify(result)
+    # -------------------------------
+    # STATIC MODE
+    # -------------------------------
+    hexes = data.get("hexes", [])
+
+    if not hexes:
+        return jsonify({"error": "No hexes provided"}), 400
+
+    weights, start, goal, valid_cells = build_weights_from_hexes(hexes)
+
+    # ---------------- A* ----------------
+    t0 = time.perf_counter()
+    path, steps, cost, nodes_explored, explored_nodes = run_astar(
+        start, goal, weights, valid_cells
+    )
+    t1 = time.perf_counter()
+
+    astar_result = {
+        "path": [{"q": p[0], "r": p[1]} for p in path],
+        "steps": steps,
+        "cost": cost,
+        "nodes": nodes_explored,
+        "explored": explored_nodes,
+        "time_ms": round((t1 - t0) * 1000, 3)
+    }
+
+    # ---------------- DQN ----------------
+    t0 = time.perf_counter()
+    dqn_result = run_dqn(weights, start, goal)
+    t1 = time.perf_counter()
+    dqn_result["time_ms"] = round((t1 - t0) * 1000, 3)
+
+    # ---------------- HYBRID ----------------
+    t0 = time.perf_counter()
+    h_path, h_steps, h_cost, h_nodes_explored, h_explored_nodes = run_hybrid(
+        start, goal, weights, valid_cells
+    )
+    t1 = time.perf_counter()
+
+    hybrid_result = {
+        "path": [{"q": p[0], "r": p[1]} for p in h_path],
+        "steps": h_steps,
+        "cost": h_cost,
+        "nodes": h_nodes_explored,
+        "explored": h_explored_nodes,
+        "time_ms": round((t1 - t0) * 1000, 3)
+    }
+
+    return jsonify({
+        "mode": "static",
+        "hexes": hexes,
+        "astar": astar_result,
+        "dqn": dqn_result,
+        "hybrid": hybrid_result
+    })
+
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)

@@ -1,30 +1,29 @@
-import numpy as np
-from scipy.spatial.distance import cityblock
+def build_weights_from_hexes(hexes):
+    weights = {}
+    valid_cells = set()
 
-# Axial hex coordinates directions
-DIRECTIONS = [(1, 0), (1, -1), (0, -1), (-1, 0), (-1, 1), (0, 1)]
+    start = None
+    goal = None
 
-def hex_distance(q1, r1, q2, r2):
-    return (abs(q1 - q2) + abs(r1 - r2) + abs((-q1-r1) - (-q2-r2))) // 2
+    for h in hexes:
+        q = h["q"]
+        r = h["r"]
+        w = h["weight"]
 
-def create_grid(size=10, scenario="static", seed=None):
-    rng = np.random.default_rng(seed)
-    grid = np.zeros((size, size), dtype=int)  # 0=free, 1=obstacle, 2=start, 3=goal
-    start, goal = (0, 0), (size-1, size-1)
-    grid[start] = 2
-    grid[goal] = 3
+        weights[(q, r)] = w
+        valid_cells.add((q, r))
 
-    if scenario == "static":
-        obs_mask = rng.random((size, size)) > 0.7
-        obs_mask[start] = obs_mask[goal] = False
-        grid[obs_mask] = 1
-    elif scenario == "dynamic":
-        # 30% obstacles, will shift during execution
-        obs_mask = rng.random((size, size)) > 0.7
-        obs_mask[start] = obs_mask[goal] = False
-        grid[obs_mask] = 1
-    elif scenario == "partially_unknown":
-        obs_mask = rng.random((size, size)) > 0.65
-        obs_mask[start] = obs_mask[goal] = False
-        grid[obs_mask] = 1
-    return grid, start, goal
+        if h.get("is_start"):
+            start = (q, r)
+        if h.get("is_goal"):
+            goal = (q, r)
+
+    if start is None:
+        start = (-6, 0)
+    if goal is None:
+        goal = (6, 0)
+
+    weights[start] = 1
+    weights[goal] = 1
+
+    return weights, start, goal, valid_cells

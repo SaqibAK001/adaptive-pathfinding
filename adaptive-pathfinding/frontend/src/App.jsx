@@ -1,35 +1,58 @@
-import React, { useState } from "react";
-import { trainRL } from "./services/api";
+import React, { useEffect, useState } from "react";
 import HexGrid from "./components/HexGrid";
-import axios from "axios";
+import MetricsChart from "./components/MetricsChart";
+import { trainRL, runAllAlgorithms } from "./services/api";
 
 const App = () => {
+  const STATIC_RADIUS = 6;
+
   const [hexes, setHexes] = useState([]);
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  const [envMode, setEnvMode] = useState("static");
+
+  // static editing
   const [editMode, setEditMode] = useState(false);
   const [editTool, setEditTool] = useState("obstacle");
   const [weightValue, setWeightValue] = useState(5);
 
+  // view
   const [activeView, setActiveView] = useState("astar");
   const [showExplored, setShowExplored] = useState(true);
 
-  const RADIUS = 6;
+  // dynamic settings
+  const [dynamicRadius, setDynamicRadius] = useState(6);
+  const [frameCount, setFrameCount] = useState(25);
+  const [stepsPerFrame, setStepsPerFrame] = useState(2);
+  const [intervalSeconds, setIntervalSeconds] = useState(2);
 
-  const initGrid = () => {
+  const [frames, setFrames] = useState([]);
+  const [frameIndex, setFrameIndex] = useState(0);
+
+  // NEW: play/pause
+  const [isPlaying, setIsPlaying] = useState(true);
+
+  // -------------------------
+  // STATIC GRID INIT
+  // -------------------------
+  const initStaticGrid = () => {
     const newHexes = [];
-    for (let q = -RADIUS; q <= RADIUS; q++) {
+
+    for (let q = -STATIC_RADIUS; q <= STATIC_RADIUS; q++) {
       for (
-        let r = Math.max(-RADIUS, -q - RADIUS);
-        r <= Math.min(RADIUS, -q + RADIUS);
+        let r = Math.max(-STATIC_RADIUS, -q - STATIC_RADIUS);
+        r <= Math.min(STATIC_RADIUS, -q + STATIC_RADIUS);
         r++
       ) {
         newHexes.push({ q, r, weight: 1, is_start: false, is_goal: false });
       }
     }
-    const startHex = newHexes.find((h) => h.q === -RADIUS && h.r === 0);
-    const goalHex = newHexes.find((h) => h.q === RADIUS && h.r === 0);
+
+    const startHex = newHexes.find(
+      (h) => h.q === -STATIC_RADIUS && h.r === 0
+    );
+    const goalHex = newHexes.find((h) => h.q === STATIC_RADIUS && h.r === 0);
 
     if (startHex) startHex.is_start = true;
     if (goalHex) goalHex.is_goal = true;
@@ -37,10 +60,15 @@ const App = () => {
     return newHexes;
   };
 
+  // -------------------------
+  // RANDOM STATIC GRID
+  // -------------------------
   const generateRandomGrid = () => {
-    const newHexes = initGrid();
+    const newHexes = initStaticGrid();
+
     newHexes.forEach((h) => {
       const rand = Math.random();
+
       if (rand < 0.2) h.weight = 0;
       else if (rand < 0.4) h.weight = Math.floor(Math.random() * 8) + 3;
       else h.weight = 1;
@@ -50,24 +78,44 @@ const App = () => {
 
     setHexes(newHexes);
     setResults(null);
+    setEditMode(false);
   };
 
-  const toggleEditMode = () => {
-    const next = !editMode;
-    setEditMode(next);
-
-    if (next && hexes.length === 0) setHexes(initGrid());
+  // -------------------------
+  // CREATE CUSTOM GRID
+  // -------------------------
+  const createCustomGrid = () => {
+    setHexes(initStaticGrid());
+    setResults(null);
+    setEditMode(true);
   };
 
+  // -------------------------
+  // CLICK GRID CELL (STATIC EDIT)
+  // -------------------------
   const handleGridClick = (q, r) => {
     if (!editMode) return;
+    if (envMode === "dynamic") return;
 
     const newHexes = hexes.map((h) => {
       if (h.q === q && h.r === r) {
-        if (editTool === "obstacle") return { ...h, weight: 0 };
-        if (editTool === "start") return { ...h, weight: 1, is_start: true };
-        if (editTool === "goal") return { ...h, weight: 1, is_goal: true };
-        if (editTool === "weight") return { ...h, weight: weightValue };
+        if (editTool === "obstacle") {
+          if (h.is_start || h.is_goal) return h;
+          return { ...h, weight: 0 };
+        }
+
+        if (editTool === "weight") {
+          if (h.is_start || h.is_goal) return h;
+          return { ...h, weight: weightValue };
+        }
+
+        if (editTool === "start") {
+          return { ...h, is_start: true, weight: 1 };
+        }
+
+        if (editTool === "goal") {
+          return { ...h, is_goal: true, weight: 1 };
+        }
       }
 
       if (editTool === "start" && h.is_start) return { ...h, is_start: false };
@@ -79,315 +127,319 @@ const App = () => {
     setHexes(newHexes);
   };
 
+  // -------------------------
+  // DYNAMIC TIMER (PLAY/PAUSE)
+  // -------------------------
+  useEffect(() => {
+    if (envMode !== "dynamic") return;
+    if (!frames || frames.length === 0) return;
+    if (!isPlaying) return;
+
+    const interval = setInterval(() => {
+      setFrameIndex((prev) => {
+        if (prev + 1 >= frames.length) return prev;
+        return prev + 1;
+      });
+    }, intervalSeconds * 1000);
+
+    return () => clearInterval(interval);
+  }, [frames, intervalSeconds, envMode, isPlaying]);
+
+  // -------------------------
+  // APPLY FRAME GRID UPDATES
+  // -------------------------
+  useEffect(() => {
+    if (envMode !== "dynamic") return;
+    if (!frames || frames.length === 0) return;
+
+    const f = frames[frameIndex];
+    if (f && f.grid) {
+      const startNode = results?.start;
+      const goalNode = results?.goal;
+
+      const updatedHexes = f.grid.map((cell) => {
+        const isStart =
+          startNode && cell.q === startNode.q && cell.r === startNode.r;
+        const isGoal =
+          goalNode && cell.q === goalNode.q && cell.r === goalNode.r;
+
+        return {
+          q: cell.q,
+          r: cell.r,
+          weight: cell.weight,
+          is_start: isStart,
+          is_goal: isGoal,
+        };
+      });
+
+      setHexes(updatedHexes);
+    }
+  }, [frameIndex, frames, envMode, results]);
+
+  // -------------------------
+  // TRAIN RL
+  // -------------------------
   const handleTrain = async () => {
     try {
       await trainRL("static");
-      alert("✓ RL Model Trained!");
-    } catch (err) {
+      alert("✓ RL Model Loaded!");
+    } catch {
       alert("✗ Training Failed");
     }
   };
 
+  // -------------------------
+  // RUN ALL
+  // -------------------------
   const handleRunAll = async () => {
     setLoading(true);
-    try {
-      const payload = { hexes };
-      const res = await axios.post("http://localhost:5000/api/run_all", payload);
 
-      setHexes(res.data.hexes);
+    try {
+      let payload;
+
+      if (envMode === "static") {
+        payload = { env_mode: "static", hexes };
+      } else {
+        payload = {
+          env_mode: "dynamic",
+          radius: dynamicRadius,
+          frame_count: frameCount,
+          steps_per_frame: stepsPerFrame,
+        };
+      }
+
+      const res = await runAllAlgorithms(payload);
+
       setResults(res.data);
       setActiveView("astar");
+      setEditMode(false);
+
+      if (envMode === "dynamic") {
+        setFrames(res.data.frames);
+        setFrameIndex(0);
+        setIsPlaying(true);
+      } else {
+        setHexes(res.data.hexes);
+      }
     } catch (err) {
+      console.log(err);
       alert("✗ Error running algorithms");
     }
+
     setLoading(false);
   };
 
-  const getDisplayPath = () => results?.[activeView]?.path || [];
-  const getDisplayExplored = () => results?.[activeView]?.explored || [];
+  // -------------------------
+  // PATH DISPLAY LOGIC
+  // -------------------------
+  const getDynamicPathUntilFrame = () => {
+    if (!results) return [];
+
+    const fullPath = results?.[activeView]?.path || [];
+
+    if (envMode !== "dynamic") return fullPath;
+
+    const visibleSteps = (frameIndex + 1) * stepsPerFrame + 1;
+    return fullPath.slice(0, Math.min(fullPath.length, visibleSteps));
+  };
+
+  const displayPath = getDynamicPathUntilFrame();
+  const displayExplored = results?.[activeView]?.explored || [];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex justify-center">
-      <div className="w-full max-w-7xl px-6 py-10">
-        {/* Header */}
-        <header className="text-center mb-10">
-          <h1 className="text-4xl font-extrabold tracking-tight text-slate-900">
-            Adaptive Pathfinding
-          </h1>
-          <p className="text-slate-500 mt-2 text-lg">
-            A* • DQN • Hybrid RL on Hexagonal Grids
-          </p>
-        </header>
+    <div style={{ padding: "20px" }}>
+      <h1>Adaptive Pathfinding</h1>
+      <p>A* • DQN • Hybrid RL on Hexagonal Grids</p>
 
-        {/* Toolbar */}
-        <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-5 mb-8 flex flex-wrap justify-center gap-3">
-          <button
-            onClick={toggleEditMode}
-            className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border
-              ${
-                editMode
-                  ? "bg-red-50 border-red-200 text-red-700 hover:bg-red-100"
-                  : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-              }`}
+      {/* ENV MODE */}
+      <div style={{ marginBottom: "15px" }}>
+        <label style={{ fontWeight: "bold" }}>
+          Environment:{" "}
+          <select
+            value={envMode}
+            onChange={(e) => {
+              setEnvMode(e.target.value);
+              setResults(null);
+              setHexes([]);
+              setEditMode(false);
+              setFrames([]);
+              setFrameIndex(0);
+              setIsPlaying(true);
+            }}
           >
-            {editMode ? "✕ Cancel Edit" : "✎ Edit Grid"}
-          </button>
+            <option value="static">Static</option>
+            <option value="dynamic">Dynamic</option>
+          </select>
+        </label>
+      </div>
 
-          <button
-            onClick={handleTrain}
-            className="px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-          >
-            🧠 Train RL
+      {/* STATIC CONTROLS */}
+      {envMode === "static" && (
+        <div style={{ marginBottom: "15px" }}>
+          <button onClick={generateRandomGrid}>🎲 Random Grid</button>{" "}
+          <button onClick={createCustomGrid}>🛠 Create Custom Grid</button>{" "}
+          <button onClick={() => setEditMode(!editMode)}>
+            {editMode ? "❌ Stop Editing" : "✏ Edit Grid"}
           </button>
-
-          <button
-            onClick={generateRandomGrid}
-            className="px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-          >
-            🎲 Random Grid
-          </button>
-
-          <button
-            onClick={handleRunAll}
-            disabled={loading}
-            className={`px-6 py-2.5 rounded-xl font-bold text-sm transition shadow-md
-              ${
-                loading
-                  ? "bg-blue-400 cursor-not-allowed text-white"
-                  : "bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white"
-              }`}
-          >
-            {loading ? "⏳ Running..." : "▶ Run All"}
-          </button>
-
-          <div className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
-            <input
-              type="checkbox"
-              checked={showExplored}
-              onChange={(e) => setShowExplored(e.target.checked)}
-              className="w-4 h-4 accent-blue-600"
-            />
-            <span className="text-sm font-semibold text-slate-700">
-              Show explored
-            </span>
-          </div>
         </div>
+      )}
 
-        {/* Edit Tools */}
-        {editMode && (
-          <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-6 mb-8 text-center">
-            <h3 className="font-bold text-slate-900 mb-4 text-lg">
-              Grid Editing Tools
-            </h3>
+      {/* EDIT TOOL CONTROLS */}
+      {envMode === "static" && editMode && (
+        <div style={{ marginBottom: "15px" }}>
+          <label>
+            Tool:{" "}
+            <select
+              value={editTool}
+              onChange={(e) => setEditTool(e.target.value)}
+            >
+              <option value="obstacle">Obstacle</option>
+              <option value="weight">Weight</option>
+              <option value="start">Set Start</option>
+              <option value="goal">Set Goal</option>
+            </select>
+          </label>
 
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <button
-                onClick={() => setEditTool("obstacle")}
-                className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border
-                  ${
-                    editTool === "obstacle"
-                      ? "bg-slate-900 text-white border-slate-900"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                🪨 Obstacle
-              </button>
+          {editTool === "weight" && (
+            <label style={{ marginLeft: "15px" }}>
+              Weight:{" "}
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={weightValue}
+                onChange={(e) => setWeightValue(Number(e.target.value))}
+              />
+            </label>
+          )}
+        </div>
+      )}
 
-              <button
-                onClick={() => setEditTool("start")}
-                className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border
-                  ${
-                    editTool === "start"
-                      ? "bg-blue-600 text-white border-blue-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                🟦 Start
-              </button>
-
-              <button
-                onClick={() => setEditTool("goal")}
-                className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border
-                  ${
-                    editTool === "goal"
-                      ? "bg-red-600 text-white border-red-600"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                🟥 Goal
-              </button>
-
-              <div className="flex items-center gap-3 px-5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
-                <span className="text-xs font-bold text-slate-500 uppercase">
-                  Weight
-                </span>
-
-                <input
-                  type="range"
-                  min="1"
-                  max="15"
-                  value={weightValue}
-                  onChange={(e) => setWeightValue(Number(e.target.value))}
-                  className="w-28 accent-blue-600"
-                />
-
-                <span className="font-mono font-bold text-slate-900 w-6 text-center">
-                  {weightValue}
-                </span>
-              </div>
-
-              <button
-                onClick={() => setEditTool("weight")}
-                className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition shadow-sm border
-                  ${
-                    editTool === "weight"
-                      ? "bg-amber-500 text-white border-amber-500"
-                      : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                  }`}
-              >
-                ✏️ Apply Weight
-              </button>
-            </div>
+      {/* DYNAMIC CONTROLS */}
+      {envMode === "dynamic" && (
+        <div style={{ marginBottom: "15px" }}>
+          <div>
+            <label>
+              Radius{" "}
+              <input
+                type="number"
+                value={dynamicRadius}
+                min={3}
+                max={12}
+                onChange={(e) => setDynamicRadius(Number(e.target.value))}
+              />
+            </label>
           </div>
-        )}
 
-        {/* Grid */}
-        <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-6 mb-10 flex justify-center">
-          {hexes.length > 0 ? (
-            <HexGrid
-              hexes={hexes}
-              path={getDisplayPath()}
-              explored={getDisplayExplored()}
-              onHexClick={handleGridClick}
-              editable={editMode}
-              showExplored={showExplored}
-            />
-          ) : (
-            <div className="h-64 flex flex-col items-center justify-center text-slate-400">
-              <div className="text-6xl mb-4 opacity-40">🗺️</div>
-              <p className="font-bold text-lg">No grid loaded</p>
-              <p className="text-sm mt-1 text-slate-500">
-                Click <span className="font-bold">Edit Grid</span> or{" "}
-                <span className="font-bold">Random Grid</span> to begin
-              </p>
+          <div>
+            <label>
+              Frames{" "}
+              <input
+                type="number"
+                value={frameCount}
+                min={5}
+                max={100}
+                onChange={(e) => setFrameCount(Number(e.target.value))}
+              />
+            </label>
+          </div>
+
+          <div>
+            <label>
+              Steps/Frame{" "}
+              <input
+                type="number"
+                value={stepsPerFrame}
+                min={1}
+                max={10}
+                onChange={(e) => setStepsPerFrame(Number(e.target.value))}
+              />
+            </label>
+          </div>
+
+          <div>
+            <label>
+              Interval(s){" "}
+              <input
+                type="number"
+                value={intervalSeconds}
+                min={0.5}
+                max={10}
+                step={0.5}
+                onChange={(e) => setIntervalSeconds(Number(e.target.value))}
+              />
+            </label>
+          </div>
+
+          {/* PLAY / PAUSE / RESET */}
+          {frames.length > 0 && (
+            <div style={{ marginTop: "10px" }}>
+              <button onClick={() => setIsPlaying(!isPlaying)}>
+                {isPlaying ? "⏸ Pause" : "▶ Play"}
+              </button>{" "}
+              <button
+                onClick={() => {
+                  setFrameIndex(0);
+                  setIsPlaying(false);
+                }}
+              >
+                ⏮ Reset
+              </button>
             </div>
           )}
         </div>
+      )}
 
-        {/* Results */}
-        {results && (
-          <div className="flex flex-col items-center gap-8">
-            {/* Algorithm Selector */}
-            <div className="bg-white border border-slate-200 shadow-sm rounded-2xl p-5 w-full max-w-3xl">
-              <h3 className="font-bold text-slate-900 text-lg mb-4 text-center">
-                Algorithm View
-              </h3>
-
-              <div className="flex flex-wrap justify-center gap-3">
-                {[
-                  { key: "astar", label: "A*", color: "bg-green-500" },
-                  { key: "dqn", label: "DQN", color: "bg-red-500" },
-                  { key: "hybrid", label: "Hybrid", color: "bg-purple-500" },
-                ].map((algo) => (
-                  <button
-                    key={algo.key}
-                    onClick={() => setActiveView(algo.key)}
-                    className={`px-6 py-3 rounded-xl border font-semibold transition flex items-center gap-3 shadow-sm
-                      ${
-                        activeView === algo.key
-                          ? "bg-blue-50 border-blue-200 text-blue-700"
-                          : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100"
-                      }`}
-                  >
-                    <span className={`w-3 h-3 rounded-full ${algo.color}`}></span>
-                    {algo.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Table */}
-            <div className="bg-white border border-slate-200 shadow-sm rounded-2xl overflow-hidden w-full max-w-5xl">
-              <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 text-center">
-                <h3 className="font-bold text-slate-900 text-xl">
-                  Performance Metrics
-                </h3>
-                <p className="text-sm text-slate-500 mt-1">
-                  Detailed comparison of algorithms
-                </p>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="bg-slate-100 text-slate-700 text-sm">
-                      <th className="border border-slate-200 px-4 py-3 text-center">
-                        Algorithm
-                      </th>
-                      <th className="border border-slate-200 px-4 py-3 text-center">
-                        Time (s)
-                      </th>
-                      <th className="border border-slate-200 px-4 py-3 text-center">
-                        Steps
-                      </th>
-                      <th className="border border-slate-200 px-4 py-3 text-center">
-                        Cost
-                      </th>
-                      <th className="border border-slate-200 px-4 py-3 text-center">
-                        Nodes
-                      </th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {[
-                      { key: "astar", label: "A*", badge: "bg-green-100 text-green-700" },
-                      { key: "dqn", label: "DQN", badge: "bg-red-100 text-red-700" },
-                      { key: "hybrid", label: "Hybrid", badge: "bg-purple-100 text-purple-700" },
-                    ].map((row) => (
-                      <tr
-                        key={row.key}
-                        className="hover:bg-slate-50 transition text-center"
-                      >
-                        <td className="border border-slate-200 px-4 py-3 font-bold">
-                          <span
-                            className={`px-3 py-1 rounded-full text-xs font-bold ${row.badge}`}
-                          >
-                            {row.label}
-                          </span>
-                        </td>
-
-                        <td className="border border-slate-200 px-4 py-3 font-mono text-slate-700">
-                          {results[row.key]?.metrics?.time?.toFixed(5)}
-                        </td>
-
-                        <td className="border border-slate-200 px-4 py-3 font-bold text-slate-900">
-                          {results[row.key]?.metrics?.steps}
-                        </td>
-
-                        <td className="border border-slate-200 px-4 py-3 font-bold text-amber-600">
-                          {results[row.key]?.metrics?.cost}
-                        </td>
-
-                        <td className="border border-slate-200 px-4 py-3 text-slate-700 font-semibold">
-                          {results[row.key]?.metrics?.nodes}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Footer */}
-        <footer className="mt-16 text-center text-slate-400 text-sm">
-          <p className="font-medium">
-            VI Semester Mini Project • AI & Reinforcement Learning
-          </p>
-        </footer>
+      {/* MAIN BUTTONS */}
+      <div style={{ marginBottom: "15px" }}>
+        <button onClick={handleTrain}>🧠 Train RL</button>{" "}
+        <button onClick={handleRunAll} disabled={loading}>
+          ▶ Run All
+        </button>
       </div>
+
+      {/* EXPLORED TOGGLE */}
+      <div style={{ marginBottom: "15px" }}>
+        <input
+          type="checkbox"
+          checked={showExplored}
+          onChange={(e) => setShowExplored(e.target.checked)}
+        />{" "}
+        Show explored nodes
+      </div>
+
+      {/* GRID */}
+      <div style={{ marginTop: "20px" }}>
+        {hexes.length > 0 && (
+          <HexGrid
+            hexes={hexes}
+            path={displayPath}
+            explored={showExplored ? displayExplored : []}
+            onHexClick={handleGridClick}
+            editable={editMode}
+            showExplored={showExplored}
+          />
+        )}
+      </div>
+
+      {/* RESULTS */}
+      {results && (
+        <div style={{ marginTop: "30px" }}>
+          <h2>Algorithm View</h2>
+
+          <button onClick={() => setActiveView("astar")}>ASTAR</button>{" "}
+          <button onClick={() => setActiveView("dqn")}>DQN</button>{" "}
+          <button onClick={() => setActiveView("hybrid")}>HYBRID</button>
+
+          {envMode === "dynamic" && frames.length > 0 && (
+            <p>
+              Frame {frameIndex + 1} / {frames.length}
+            </p>
+          )}
+
+          <MetricsChart results={results} />
+        </div>
+      )}
     </div>
   );
 };

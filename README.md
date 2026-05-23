@@ -128,43 +128,7 @@ The Vite dev server starts on `http://localhost:5173`.
 
 ---
 
-## Project Structure
 
-```
-MP/
-├── architecture.png
-├── workflow.png
-├── Rewritten-Pathfinding-Paper.docx
-└── source cose/
-    ├── backend/
-    │   ├── algorithms/
-    │   │   ├── astar.py
-    │   │   ├── rl_agent.py
-    │   │   ├── rl_env.py
-    │   │   └── hybrid.py
-    │   ├── models/
-    │   │   └── dqn_qnet.pth
-    │   ├── app.py
-    │   ├── dynamic_grid.py
-    │   ├── dynamic_runner.py
-    │   ├── hex_grid.py
-    │   └── requirements.txt
-    └── frontend/
-        ├── src/
-        │   ├── components/
-        │   │   ├── HexGrid.jsx
-        │   │   ├── ControlPanel.jsx
-        │   │   └── MetricsChart.jsx
-        │   ├── services/
-        │   │   └── api.js
-        │   ├── App.jsx
-        │   └── main.jsx
-        ├── index.html
-        ├── vite.config.js
-        └── tailwind.config.js
-```
-
----
 
 ## License
 

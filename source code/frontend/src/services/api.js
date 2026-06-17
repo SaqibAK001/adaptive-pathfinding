@@ -1,9 +1,7 @@
 import axios from "axios";
 
 const API = axios.create({
-  baseURL: "http://127.0.0.1:5000/api",
+  baseURL: import.meta.env.VITE_API_URL
 });
 
-export const trainRL = (scenario = "static") => API.post("/train", { scenario });
-
-export const runAllAlgorithms = (payload) => API.post("/run_all", payload);
+export default API;
